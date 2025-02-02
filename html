@@ -1,0 +1,347 @@
+<!DOCTYPE html>
+
+<html lang="pt">
+
+<head>
+
+  <meta charset="UTF-8">
+
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+
+  <title>Cortador de Música</title>
+
+  <style>
+
+    body { font-family: Arial, sans-serif; text-align: center; margin: 20px; }
+
+    input, button { margin: 10px; }
+
+  </style>
+
+</head>
+
+<body>
+
+  <h1>Cortador de Música</h1>
+
+  <input type="file" id="audioFile" accept="audio/*">
+
+  <br>
+
+  <label>Início (segundos): <input type="number" id="startTime" min="0" step="0.1"></label>
+
+  <label>Fim (segundos): <input type="number" id="endTime" min="0" step="0.1"></label>
+
+  <br>
+
+  <button onclick="cutAudio()">Cortar</button>
+
+  <br>
+
+  <audio id="audioPreview" controls></audio>
+
+  <br>
+
+  <a id="downloadLink" style="display: none;">Baixar Trecho</a>
+
+ 
+
+  <script>
+
+    let audioBuffer;
+
+    let audioContext;
+
+    
+
+    function initAudioContext() {
+
+      if (!audioContext) {
+
+        audioContext = new (window.AudioContext || window.webkitAudioContext)();
+
+      }
+
+    }
+
+    
+
+    // Carregar o arquivo de áudio
+
+    document.getElementById('audioFile').addEventListener('change', function(event) {
+
+      initAudioContext();
+
+      const file = event.target.files[0];
+
+      if (file) {
+
+        const reader = new FileReader();
+
+        reader.onload = function(e) {
+
+          const arrayBuffer = e.target.result;
+
+          audioContext.decodeAudioData(arrayBuffer, 
+
+            function(decodedData) {
+
+              audioBuffer = decodedData;
+
+              console.log('Áudio carregado:', audioBuffer);
+
+            }, 
+
+            function(error) {
+
+              console.error('Erro ao decodificar áudio:', error);
+
+              alert("Erro ao carregar o áudio. Tente outro arquivo.");
+
+            }
+
+          );
+
+        };
+
+        reader.readAsArrayBuffer(file);
+
+      }
+
+    });
+
+    
+
+    function cutAudio() {
+
+      if (!audioBuffer) {
+
+        alert("Carregue um arquivo de áudio primeiro!");
+
+        return;
+
+      }
+
+      
+
+      const start = parseFloat(document.getElementById('startTime').value);
+
+      const end = parseFloat(document.getElementById('endTime').value);
+
+      
+
+      if (isNaN(start) || isNaN(end) || start >= end || start < 0 || end > audioBuffer.duration) {
+
+        alert("Insira tempos válidos!");
+
+        return;
+
+      }
+
+      
+
+      const sampleRate = audioBuffer.sampleRate;
+
+      const startSample = Math.floor(start * sampleRate);
+
+      const endSample = Math.floor(end * sampleRate);
+
+      const frameCount = endSample - startSample;
+
+      const numChannels = audioBuffer.numberOfChannels;
+
+      
+
+      // Cria um novo AudioBuffer para o trecho cortado
+
+      const newBuffer = audioContext.createBuffer(numChannels, frameCount, sampleRate);
+
+      for (let channel = 0; channel < numChannels; channel++) {
+
+        const oldData = audioBuffer.getChannelData(channel);
+
+        // Copia os dados usando slice (que já retorna uma cópia dos dados do Float32Array)
+
+        const segment = oldData.slice(startSample, endSample);
+
+        newBuffer.copyToChannel(segment, channel, 0);
+
+      }
+
+      
+
+      exportWAV(newBuffer);
+
+    }
+
+    
+
+    function exportWAV(buffer) {
+
+      const numChannels = buffer.numberOfChannels;
+
+      const sampleRate = buffer.sampleRate;
+
+      let samples;
+
+      
+
+      if (numChannels === 2) {
+
+        samples = interleave(buffer.getChannelData(0), buffer.getChannelData(1));
+
+      } else {
+
+        samples = buffer.getChannelData(0);
+
+      }
+
+      
+
+      const wavBuffer = encodeWAV(samples, sampleRate, numChannels);
+
+      const blob = new Blob([new DataView(wavBuffer)], { type: 'audio/wav' });
+
+      const url = URL.createObjectURL(blob);
+
+      
+
+      document.getElementById('audioPreview').src = url;
+
+      const downloadLink = document.getElementById('downloadLink');
+
+      downloadLink.href = url;
+
+      downloadLink.download = "trecho.wav";
+
+      downloadLink.style.display = "block";
+
+      downloadLink.textContent = "Baixar Trecho";
+
+    }
+
+    
+
+    function interleave(inputL, inputR) {
+
+      const length = inputL.length + inputR.length;
+
+      const result = new Float32Array(length);
+
+      let index = 0, inputIndex = 0;
+
+      while (inputIndex < inputL.length) {
+
+        result[index++] = inputL[inputIndex];
+
+        result[index++] = inputR[inputIndex];
+
+        inputIndex++;
+
+      }
+
+      return result;
+
+    }
+
+    
+
+    function encodeWAV(samples, sampleRate, numChannels) {
+
+      const buffer = new ArrayBuffer(44 + samples.length * 2);
+
+      const view = new DataView(buffer);
+
+      
+
+      // RIFF identifier
+
+      writeString(view, 0, 'RIFF');
+
+      // tamanho do arquivo - 8 bytes
+
+      view.setUint32(4, 36 + samples.length * 2, true);
+
+      // RIFF type
+
+      writeString(view, 8, 'WAVE');
+
+      // 'fmt ' chunk
+
+      writeString(view, 12, 'fmt ');
+
+      // tamanho do 'fmt ' chunk
+
+      view.setUint32(16, 16, true);
+
+      // formato PCM
+
+      view.setUint16(20, 1, true);
+
+      // número de canais
+
+      view.setUint16(22, numChannels, true);
+
+      // taxa de amostragem
+
+      view.setUint32(24, sampleRate, true);
+
+      // byte rate
+
+      view.setUint32(28, sampleRate * numChannels * 2, true);
+
+      // block align
+
+      view.setUint16(32, numChannels * 2, true);
+
+      // bits por amostra
+
+      view.setUint16(34, 16, true);
+
+      // data chunk identifier
+
+      writeString(view, 36, 'data');
+
+      // data chunk length
+
+      view.setUint32(40, samples.length * 2, true);
+
+      
+
+      floatTo16BitPCM(view, 44, samples);
+
+      return buffer;
+
+    }
+
+    
+
+    function floatTo16BitPCM(output, offset, input) {
+
+      for (let i = 0; i < input.length; i++, offset += 2) {
+
+        let s = Math.max(-1, Math.min(1, input[i]));
+
+        output.setInt16(offset, s < 0 ? s * 0x8000 : s * 0x7FFF, true);
+
+      }
+
+    }
+
+    
+
+    function writeString(view, offset, string) {
+
+      for (let i = 0; i < string.length; i++) {
+
+        view.setUint8(offset + i, string.charCodeAt(i));
+
+      }
+
+    }
+
+  </script>
+
+</body>
+
+</html>
